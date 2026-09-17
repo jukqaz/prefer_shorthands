@@ -294,9 +294,10 @@ class Visitor extends SimpleAstVisitor<void> {
       final parameter = argument.correspondingParameter;
       final baseType = parameter?.baseElement.type;
 
-      // analyzer 13+ removed `Argument.hasExplicitTypeContext`. Without it we cannot tell whether a generic
-      // parameter has an explicit type context, so stay conservative and never suggest a shorthand there.
-      if (baseType is TypeParameterType) continue;
+      // analyzer 13+: `ArgumentList.arguments` are `Argument`s, so the upstream helper (an extension on
+      // Expression) has to be applied to the unwrapped expression. Same ancestors, same semantics: only
+      // suggest a shorthand for a type-parameter-typed parameter when the type context is explicit.
+      if (baseType is TypeParameterType && !expression.hasExplicitTypeContext) continue;
 
       _checkAndReport(expression: expression, declaredType: parameter?.type);
     }
