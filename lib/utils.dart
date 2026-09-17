@@ -130,10 +130,9 @@ extension TypedLiteralExtension on TypedLiteral {
         ),
       ) =>
         type,
-      DefaultFormalParameter(
-        parameter: SimpleFormalParameter(
-          type: NamedType(:final InterfaceType type),
-        ),
+      // analyzer 13+: default values hang off `FormalParameter.defaultClause` (DefaultFormalParameter/SimpleFormalParameter removed).
+      FormalParameterDefaultClause(
+        parent: FormalParameter(type: NamedType(:final InterfaceType type)),
       ) =>
         type,
       _ => null,

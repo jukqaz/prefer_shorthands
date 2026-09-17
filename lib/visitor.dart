@@ -37,7 +37,10 @@ class Visitor extends SimpleAstVisitor<void> {
     registry.addIfElement(rule, this);
     registry.addForElement(rule, this);
     registry.addMapLiteralEntry(rule, this);
-    registry.addDefaultFormalParameter(rule, this);
+    // analyzer 13+: DefaultFormalParameter is gone; defaults live on every FormalParameter (`defaultClause`).
+    registry.addRegularFormalParameter(rule, this);
+    registry.addFieldFormalParameter(rule, this);
+    registry.addSuperFormalParameter(rule, this);
     registry.addReturnStatement(rule, this);
     registry.addExpressionFunctionBody(rule, this);
     registry.addSwitchExpressionCase(rule, this);
@@ -126,7 +129,7 @@ class Visitor extends SimpleAstVisitor<void> {
       if (declaredType == null) continue;
 
       while (literalIndex < literal.fields.length &&
-          literal.fields[literalIndex] is NamedExpression) {
+          literal.fields[literalIndex] is RecordLiteralNamedField) {
         literalIndex++;
       }
 
@@ -134,11 +137,12 @@ class Visitor extends SimpleAstVisitor<void> {
 
       final literalField = literal.fields[literalIndex];
       final expression = switch (literalField) {
-        NamedExpression(:final expression) => expression,
-        _ => literalField,
+        RecordLiteralNamedField(:final fieldExpression) => fieldExpression,
+        final Expression e => e,
+        _ => null,
       };
 
-      if (!expression.isDotShorthand) {
+      if (expression != null && !expression.isDotShorthand) {
         _checkAndReport(expression: expression, declaredType: declaredType);
       }
 
@@ -152,9 +156,9 @@ class Visitor extends SimpleAstVisitor<void> {
         if (declaredType == null) continue;
 
         for (final literalField in literal.fields) {
-          if (literalField is NamedExpression &&
-              literalField.name.label.name == fieldName) {
-            final expression = literalField.expression;
+          if (literalField is RecordLiteralNamedField &&
+              literalField.name.lexeme == fieldName) {
+            final expression = literalField.fieldExpression;
             if (!expression.isDotShorthand) {
               _checkAndReport(
                 expression: expression,
@@ -195,11 +199,12 @@ class Visitor extends SimpleAstVisitor<void> {
       if (declaredType == null) continue;
 
       final expression = switch (literalField) {
-        NamedExpression(:final expression) => expression,
-        _ => literalField,
+        RecordLiteralNamedField(:final fieldExpression) => fieldExpression,
+        final Expression e => e,
+        _ => null,
       };
 
-      if (!expression.isDotShorthand) {
+      if (expression != null && !expression.isDotShorthand) {
         _checkAndReport(expression: expression, declaredType: declaredType);
       }
     }
@@ -278,19 +283,20 @@ class Visitor extends SimpleAstVisitor<void> {
   void visitArgumentList(ArgumentList node) {
     for (final argument in node.arguments) {
       final expression = switch (argument) {
-        NamedExpression(:final expression) => expression,
-        _ => argument,
+        NamedArgument(:final argumentExpression) => argumentExpression,
+        final Expression e => e,
+        _ => null,
       };
+      if (expression == null) continue;
 
       if (expression.isDotShorthand) continue;
 
       final parameter = argument.correspondingParameter;
       final baseType = parameter?.baseElement.type;
 
-      if (baseType is TypeParameterType) {
-        final hasExplicitContext = argument.hasExplicitTypeContext;
-        if (!hasExplicitContext) continue;
-      }
+      // analyzer 13+ removed `Argument.hasExplicitTypeContext`. Without it we cannot tell whether a generic
+      // parameter has an explicit type context, so stay conservative and never suggest a shorthand there.
+      if (baseType is TypeParameterType) continue;
 
       _checkAndReport(expression: expression, declaredType: parameter?.type);
     }
@@ -342,17 +348,19 @@ class Visitor extends SimpleAstVisitor<void> {
     var positionalIndex = 0;
     for (final field in node.fields) {
       final expression = switch (field) {
-        NamedExpression(:final expression) => expression,
-        _ => field,
+        RecordLiteralNamedField(:final fieldExpression) => fieldExpression,
+        final Expression e => e,
+        _ => null,
       };
+      if (expression == null) continue;
 
       if (expression.isDotShorthand) {
-        if (field is! NamedExpression) positionalIndex++;
+        if (field is! RecordLiteralNamedField) positionalIndex++;
         continue;
       }
 
       // Get the expected type for this field
-      final fieldName = field is NamedExpression ? field.name.label.name : null;
+      final fieldName = field is RecordLiteralNamedField ? field.name.lexeme : null;
       final fieldType = recordType.getFieldTypeByNameOrIndex(
         positionalIndex,
         fieldName,
@@ -362,24 +370,32 @@ class Visitor extends SimpleAstVisitor<void> {
         _checkAndReport(expression: expression, declaredType: fieldType);
       }
 
-      if (field is! NamedExpression) positionalIndex++;
+      if (field is! RecordLiteralNamedField) positionalIndex++;
     }
   }
 
   @override
-  void visitDefaultFormalParameter(DefaultFormalParameter node) {
-    final expression = node.defaultValue;
+  void visitRegularFormalParameter(RegularFormalParameter node) => _checkDefaultValue(node);
+
+  @override
+  void visitFieldFormalParameter(FieldFormalParameter node) => _checkDefaultValue(node);
+
+  @override
+  void visitSuperFormalParameter(SuperFormalParameter node) => _checkDefaultValue(node);
+
+  /// analyzer 13+: a parameter's default value is `defaultClause.value`; the declared type is the parameter's own `type`.
+  void _checkDefaultValue(FormalParameter node) {
+    final expression = node.defaultClause?.value;
     if (expression == null) return;
     if (expression.isDotShorthand) return;
 
-    final declaredType = switch (node.parameter) {
-      SimpleFormalParameter(type: NamedType(type: final type)) => type,
+    final declaredType = switch (node.type) {
+      NamedType(type: final type) => type,
       _ => null,
     };
 
     // not same as `variableDeclaration`, function parameter won't do type inference
     if (declaredType == null) return;
-
     _checkAndReport(expression: expression, declaredType: declaredType);
   }
 
